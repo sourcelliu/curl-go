@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"runtime"
+
+	"curl-translation/tool"
 )
 
 // This program is a Go translation of the intent of curl-src/src/curlinfo.c.
@@ -24,7 +26,7 @@ func main() {
 		"shuffle-dns":           true, // Go's net.Resolver shuffles by default
 		"large-time":            true, // Go's time.Time is 64-bit
 		"large-size":            true, // Go's int/uint are 64-bit on 64-bit systems
-		"xattr":                 xattrEnabled,
+		"xattr":                 tool.XattrEnabled,
 		"win32-ca-searchpath":   runtime.GOOS == "windows",
 	}
 

@@ -30,28 +30,34 @@ type Option struct {
 
 // options is a map of all supported command-line options.
 var options = map[string]Option{
-	"url":            {Name: "url", Type: ArgString, Handler: handleURL},
-	"verbose":        {Name: "verbose", ShortName: 'v', Type: ArgBool, Handler: handleVerbose},
-	"header":         {Name: "header", ShortName: 'H', Type: ArgString, Handler: handleHeader},
-	"data":           {Name: "data", ShortName: 'd', Type: ArgString, Handler: handleData},
-	"request":        {Name: "request", ShortName: 'X', Type: ArgString, Handler: handleString("CustomRequest")},
-	"user-agent":     {Name: "user-agent", ShortName: 'A', Type: ArgString, Handler: handleString("UserAgent")},
-	"insecure":       {Name: "insecure", ShortName: 'k', Type: ArgBool, Handler: handleBool("InsecureOK")},
-	"location":       {Name: "location", ShortName: 'L', Type: ArgBool, Handler: handleBool("FollowLocation")},
-	"output":         {Name: "output", ShortName: 'o', Type: ArgFile, Handler: handleOutputFile},
-	"remote-name":    {Name: "remote-name", ShortName: 'O', Type: ArgBool, Handler: handleRemoteName},
-	"user":           {Name: "user", ShortName: 'u', Type: ArgString, Handler: handleString("UserPassword")},
-	"head":           {Name: "head", ShortName: 'I', Type: ArgBool, Handler: handleHead},
-	"get":            {Name: "get", ShortName: 'G', Type: ArgBool, Handler: handleBool("UseHTTPGet")},
+	"url":             {Name: "url", Type: ArgString, Handler: handleURL},
+	"verbose":         {Name: "verbose", ShortName: 'v', Type: ArgBool, Handler: handleVerbose},
+	"header":          {Name: "header", ShortName: 'H', Type: ArgString, Handler: handleHeader},
+	"data":            {Name: "data", ShortName: 'd', Type: ArgString, Handler: handleData},
+	"request":         {Name: "request", ShortName: 'X', Type: ArgString, Handler: handleString("CustomRequest")},
+	"user-agent":      {Name: "user-agent", ShortName: 'A', Type: ArgString, Handler: handleString("UserAgent")},
+	"insecure":        {Name: "insecure", ShortName: 'k', Type: ArgBool, Handler: handleBool("InsecureOK")},
+	"location":        {Name: "location", ShortName: 'L', Type: ArgBool, Handler: handleBool("FollowLocation")},
+	"output":          {Name: "output", ShortName: 'o', Type: ArgFile, Handler: handleOutputFile},
+	"remote-name":     {Name: "remote-name", ShortName: 'O', Type: ArgBool, Handler: handleRemoteName},
+	"user":            {Name: "user", ShortName: 'u', Type: ArgString, Handler: handleString("UserPassword")},
+	"head":            {Name: "head", ShortName: 'I', Type: ArgBool, Handler: handleHead},
+	"get":             {Name: "get", ShortName: 'G', Type: ArgBool, Handler: handleBool("UseHTTPGet")},
+	"connect-timeout": {Name: "connect-timeout", Type: ArgString, Handler: handleConnectTimeout},
+	"fail":            {Name: "fail", ShortName: 'f', Type: ArgBool, Handler: handleBool("FailOnError")},
+	"range":           {Name: "range", ShortName: 'r', Type: ArgString, Handler: handleRange},
 }
 
 // shortOptions is a reverse map for finding long options by their short name.
 var shortOptions = make(map[rune]Option)
 
 func init() {
-	for _, opt := range options {
+	for name, opt := range options {
 		if opt.ShortName != 0 {
-			shortOptions[opt.ShortName] = opt
+			// Add a reference back to the long name for consistency
+			o := opt
+			o.Name = name
+			shortOptions[opt.ShortName] = o
 		}
 	}
 }
@@ -67,7 +73,6 @@ func NewParameterParser(global *GlobalConfig) *ParameterParser {
 }
 
 // Parse iterates through the command-line arguments and processes them.
-// This is the Go equivalent of the C function `parse_args`.
 func (p *ParameterParser) Parse(args []string) error {
 	stillFlags := true
 	for i := 0; i < len(args); i++ {
@@ -95,7 +100,7 @@ func (p *ParameterParser) Parse(args []string) error {
 			// Not a flag, treat as a URL
 			_, err := p.ParseOne("--url", arg)
 			if err != nil {
-				return err // Should not fail, but handle just in case
+				return err
 			}
 		}
 	}
@@ -103,7 +108,6 @@ func (p *ParameterParser) Parse(args []string) error {
 }
 
 // ParseOne parses a single flag and its potential argument.
-// This is the Go equivalent of the C function `getparameter`.
 func (p *ParameterParser) ParseOne(flag, nextarg string) (usedArg bool, err error) {
 	var opt Option
 	var ok bool
@@ -112,7 +116,6 @@ func (p *ParameterParser) ParseOne(flag, nextarg string) (usedArg bool, err erro
 	isLongOpt := strings.HasPrefix(flag, "--")
 	if isLongOpt {
 		optName := strings.TrimPrefix(flag, "--")
-		// TODO: Handle --no- prefix for boolean flags
 		opt, ok = options[optName]
 		if !ok {
 			return false, fmt.Errorf("unknown option")
@@ -123,16 +126,14 @@ func (p *ParameterParser) ParseOne(flag, nextarg string) (usedArg bool, err erro
 		if !ok {
 			return false, fmt.Errorf("unknown option")
 		}
-		// Check for bundled arguments like -ofoo
 		if len(flag) > 2 {
 			arg = flag[2:]
 		}
 	}
 
-	// Check if the option requires an argument
 	if opt.Type == ArgString || opt.Type == ArgFile {
-		if arg != "" { // Argument was bundled (e.g., -ofoo)
-			// The argument is already set
+		if arg != "" {
+			// Argument was bundled
 		} else if nextarg != "" {
 			arg = nextarg
 			usedArg = true
@@ -141,7 +142,6 @@ func (p *ParameterParser) ParseOne(flag, nextarg string) (usedArg bool, err erro
 		}
 	}
 
-	// Call the handler for the option
 	if opt.Handler != nil {
 		err = opt.Handler(p, p.Global.Last, arg)
 	}
@@ -174,6 +174,8 @@ func handleBool(fieldName string) func(*ParameterParser, *OperationConfig, strin
 			config.FollowLocation = true
 		case "UseHTTPGet":
 			config.UseHTTPGet = true
+		case "FailOnError":
+			config.FailOnError = true
 		}
 		return nil
 	}
@@ -186,7 +188,7 @@ func handleVerbose(p *ParameterParser, config *OperationConfig, arg string) erro
 func handleHead(p *ParameterParser, config *OperationConfig, arg string) error {
 	config.NoBody = true
 	config.ShowHeaders = true
-	config.UseHTTPGet = false // HEAD implies GET
+	config.UseHTTPGet = false
 	return nil
 }
 
@@ -223,6 +225,28 @@ func handleRemoteName(p *ParameterParser, config *OperationConfig, arg string) e
 		urlConf := &URLConfig{UseRemote: true, IsSet: true}
 		config.URLList = append(config.URLList, urlConf)
 	}
+	return nil
+}
+
+func handleConnectTimeout(p *ParameterParser, config *OperationConfig, arg string) error {
+	val, err := ParseSecs(arg)
+	if err != nil {
+		return err
+	}
+	config.ConnectTimeout = val
+	return nil
+}
+
+func handleRange(p *ParameterParser, config *OperationConfig, arg string) error {
+	if config.UseResume {
+		return fmt.Errorf("--continue-at is mutually exclusive with --range")
+	}
+	// A basic validation, the C code is more complex.
+	if !strings.Contains(arg, "-") {
+		// curl itself warns but proceeds, we can be stricter.
+		return fmt.Errorf("a range must contain at least one dash")
+	}
+	config.Range = arg
 	return nil
 }
 

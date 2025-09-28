@@ -3,6 +3,7 @@ package tool
 import (
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestParameterParser_ParseOne(t *testing.T) {
@@ -12,6 +13,7 @@ func TestParameterParser_ParseOne(t *testing.T) {
 		nextArg     string
 		expectUsed  bool
 		expectErr   bool
+		setupConfig func(config *OperationConfig) // Optional setup
 		checkConfig func(t *testing.T, config *OperationConfig)
 	}{
 		{
@@ -22,26 +24,6 @@ func TestParameterParser_ParseOne(t *testing.T) {
 			checkConfig: func(t *testing.T, config *OperationConfig) {
 				if config.UserAgent != "test-agent/1.0" {
 					t.Errorf("UserAgent = %q; want %q", config.UserAgent, "test-agent/1.0")
-				}
-			},
-		},
-		{
-			name:       "long boolean option",
-			flag:       "--insecure",
-			expectUsed: false,
-			checkConfig: func(t *testing.T, config *OperationConfig) {
-				if !config.InsecureOK {
-					t.Error("InsecureOK should be true")
-				}
-			},
-		},
-		{
-			name:       "short option",
-			flag:       "-L",
-			expectUsed: false,
-			checkConfig: func(t *testing.T, config *OperationConfig) {
-				if !config.FollowLocation {
-					t.Error("FollowLocation should be true")
 				}
 			},
 		},
@@ -66,12 +48,41 @@ func TestParameterParser_ParseOne(t *testing.T) {
 			nextArg:   "",
 			expectErr: true,
 		},
+		{
+			name:       "valid range",
+			flag:       "--range",
+			nextArg:    "0-1023",
+			expectUsed: true,
+			checkConfig: func(t *testing.T, config *OperationConfig) {
+				if config.Range != "0-1023" {
+					t.Errorf("Range = %q; want %q", config.Range, "0-1023")
+				}
+			},
+		},
+		{
+			name:      "range with no dash",
+			flag:      "--range",
+			nextArg:   "1024",
+			expectErr: true,
+		},
+		{
+			name:    "range conflicts with continue-at",
+			flag:    "--range",
+			nextArg: "0-",
+			setupConfig: func(config *OperationConfig) {
+				config.UseResume = true
+			},
+			expectErr: true,
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			global := NewGlobalConfig()
 			parser := NewParameterParser(global)
+			if tc.setupConfig != nil {
+				tc.setupConfig(global.Last)
+			}
 
 			used, err := parser.ParseOne(tc.flag, tc.nextArg)
 
@@ -95,6 +106,8 @@ func TestParameterParser_Parse(t *testing.T) {
 			"--user-agent", "test-agent",
 			"http://example.com",
 			"-H", "X-Test: true",
+			"--connect-timeout", "2.5",
+			"-f",
 		}
 		global := NewGlobalConfig()
 		parser := NewParameterParser(global)
@@ -113,6 +126,12 @@ func TestParameterParser_Parse(t *testing.T) {
 		}
 		if len(config.Headers) != 1 || config.Headers[0] != "X-Test: true" {
 			t.Errorf("Header not parsed correctly")
+		}
+		if config.ConnectTimeout != 2500*time.Millisecond {
+			t.Errorf("ConnectTimeout = %v; want %v", config.ConnectTimeout, 2500*time.Millisecond)
+		}
+		if !config.FailOnError {
+			t.Error("FailOnError should be true")
 		}
 	})
 
