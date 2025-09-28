@@ -2,7 +2,11 @@ package tool
 
 import (
 	"fmt"
+	"math"
+	"runtime"
+	"strconv"
 	"strings"
+	"unicode"
 )
 
 // ArgType defines the type of argument an option expects.
@@ -62,6 +66,42 @@ func NewParameterParser(global *GlobalConfig) *ParameterParser {
 	return &ParameterParser{Global: global}
 }
 
+// Parse iterates through the command-line arguments and processes them.
+// This is the Go equivalent of the C function `parse_args`.
+func (p *ParameterParser) Parse(args []string) error {
+	stillFlags := true
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		if stillFlags && strings.HasPrefix(arg, "-") {
+			if arg == "--" {
+				stillFlags = false // End of flags
+				continue
+			}
+
+			var nextArg string
+			if i+1 < len(args) {
+				nextArg = args[i+1]
+			}
+
+			usedArg, err := p.ParseOne(arg, nextArg)
+			if err != nil {
+				return fmt.Errorf("option %s: %w", arg, err)
+			}
+			if usedArg {
+				i++ // The next argument was consumed
+			}
+		} else {
+			// Not a flag, treat as a URL
+			_, err := p.ParseOne("--url", arg)
+			if err != nil {
+				return err // Should not fail, but handle just in case
+			}
+		}
+	}
+	return nil
+}
+
 // ParseOne parses a single flag and its potential argument.
 // This is the Go equivalent of the C function `getparameter`.
 func (p *ParameterParser) ParseOne(flag, nextarg string) (usedArg bool, err error) {
@@ -75,13 +115,13 @@ func (p *ParameterParser) ParseOne(flag, nextarg string) (usedArg bool, err erro
 		// TODO: Handle --no- prefix for boolean flags
 		opt, ok = options[optName]
 		if !ok {
-			return false, fmt.Errorf("unknown option: %s", flag)
+			return false, fmt.Errorf("unknown option")
 		}
 	} else { // Short option
 		shortName := rune(flag[1])
 		opt, ok = shortOptions[shortName]
 		if !ok {
-			return false, fmt.Errorf("unknown option: %s", flag)
+			return false, fmt.Errorf("unknown option")
 		}
 		// Check for bundled arguments like -ofoo
 		if len(flag) > 2 {
@@ -97,7 +137,7 @@ func (p *ParameterParser) ParseOne(flag, nextarg string) (usedArg bool, err erro
 			arg = nextarg
 			usedArg = true
 		} else {
-			return false, fmt.Errorf("option %s requires an argument", flag)
+			return false, fmt.Errorf("requires an argument")
 		}
 	}
 
@@ -113,8 +153,6 @@ func (p *ParameterParser) ParseOne(flag, nextarg string) (usedArg bool, err erro
 
 func handleString(fieldName string) func(*ParameterParser, *OperationConfig, string) error {
 	return func(p *ParameterParser, config *OperationConfig, arg string) error {
-		// This is a simplified handler. A full implementation would use reflection
-		// or a map to set the correct field in the OperationConfig.
 		switch fieldName {
 		case "UserAgent":
 			config.UserAgent = arg
@@ -129,8 +167,6 @@ func handleString(fieldName string) func(*ParameterParser, *OperationConfig, str
 
 func handleBool(fieldName string) func(*ParameterParser, *OperationConfig, string) error {
 	return func(p *ParameterParser, config *OperationConfig, arg string) error {
-		// For now, we assume arg is empty and we just toggle the boolean to true.
-		// A full implementation would handle --no- prefixes.
 		switch fieldName {
 		case "InsecureOK":
 			config.InsecureOK = true
@@ -144,10 +180,6 @@ func handleBool(fieldName string) func(*ParameterParser, *OperationConfig, strin
 }
 
 func handleVerbose(p *ParameterParser, config *OperationConfig, arg string) error {
-	// For simplicity, we just set a verbose flag. The C code has multiple levels.
-	// In our config, this could be a simple boolean or an integer.
-	// Let's assume we have a Verbose field.
-	// config.Verbose = true
 	return nil
 }
 
@@ -158,7 +190,6 @@ func handleHead(p *ParameterParser, config *OperationConfig, arg string) error {
 	return nil
 }
 
-// The following handlers are placeholders for now.
 func handleURL(p *ParameterParser, config *OperationConfig, arg string) error {
 	urlConf := &URLConfig{URL: arg, IsSet: true}
 	config.URLList = append(config.URLList, urlConf)
@@ -176,11 +207,9 @@ func handleData(p *ParameterParser, config *OperationConfig, arg string) error {
 }
 
 func handleOutputFile(p *ParameterParser, config *OperationConfig, arg string) error {
-	// This needs to find the right URLConfig to update. For now, assume the last one.
 	if len(config.URLList) > 0 {
 		config.URLList[len(config.URLList)-1].Outfile = arg
 	} else {
-		// If no URL is present yet, create one.
 		urlConf := &URLConfig{Outfile: arg, IsSet: true}
 		config.URLList = append(config.URLList, urlConf)
 	}
@@ -195,4 +224,78 @@ func handleRemoteName(p *ParameterParser, config *OperationConfig, arg string) e
 		config.URLList = append(config.URLList, urlConf)
 	}
 	return nil
+}
+
+// parseSizeParameter parses a size string with optional suffix (K, M, G).
+func parseSizeParameter(arg string) (int64, error) {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		return 0, fmt.Errorf("empty size argument")
+	}
+
+	i := 0
+	for i < len(arg) && unicode.IsDigit(rune(arg[i])) {
+		i++
+	}
+	numPart := arg[:i]
+	suffixPart := strings.ToUpper(arg[i:])
+
+	if numPart == "" {
+		return 0, fmt.Errorf("invalid number specified for size")
+	}
+
+	val, err := strconv.ParseInt(numPart, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number for size: %w", err)
+	}
+
+	var multiplier int64 = 1
+	switch suffixPart {
+	case "G":
+		multiplier = 1024 * 1024 * 1024
+	case "M":
+		multiplier = 1024 * 1024
+	case "K":
+		multiplier = 1024
+	case "B", "":
+		multiplier = 1
+	default:
+		return 0, fmt.Errorf("unsupported size unit: %s. Use G, M, K, or B", suffixPart)
+	}
+
+	if val > 0 && multiplier > 0 && val > math.MaxInt64/multiplier {
+		return 0, fmt.Errorf("size number too large: %s", arg)
+	}
+	return val * multiplier, nil
+}
+
+// parseCertParameter splits a string like "cert:password" into two parts.
+func parseCertParameter(param string) (certname, passphrase string) {
+	if param == "" {
+		return "", ""
+	}
+	if strings.HasPrefix(param, "pkcs11:") || !strings.ContainsAny(param, ":\\") {
+		return param, ""
+	}
+	var sb strings.Builder
+	for i := 0; i < len(param); i++ {
+		char := param[i]
+		if char == '\\' {
+			i++
+			if i < len(param) {
+				sb.WriteByte(param[i])
+			}
+		} else if char == ':' {
+			if runtime.GOOS == "windows" && sb.Len() == 1 && i+1 < len(param) && (param[i+1] == '\\' || param[i+1] == '/') {
+				sb.WriteByte(char)
+				continue
+			}
+			certname = sb.String()
+			passphrase = param[i+1:]
+			return
+		} else {
+			sb.WriteByte(char)
+		}
+	}
+	return sb.String(), ""
 }

@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"runtime"
 	"testing"
 )
 
@@ -55,9 +56,9 @@ func TestParameterParser_ParseOne(t *testing.T) {
 			},
 		},
 		{
-			name:       "unknown option",
-			flag:       "--non-existent-flag",
-			expectErr:  true,
+			name:      "unknown option",
+			flag:      "--non-existent-flag",
+			expectErr: true,
 		},
 		{
 			name:      "option requires argument but none given",
@@ -87,6 +88,58 @@ func TestParameterParser_ParseOne(t *testing.T) {
 		})
 	}
 }
+func TestParameterParser_Parse(t *testing.T) {
+	t.Run("full command line", func(t *testing.T) {
+		args := []string{
+			"-v",
+			"--user-agent", "test-agent",
+			"http://example.com",
+			"-H", "X-Test: true",
+		}
+		global := NewGlobalConfig()
+		parser := NewParameterParser(global)
+
+		err := parser.Parse(args)
+		if err != nil {
+			t.Fatalf("Parse() failed: %v", err)
+		}
+
+		config := global.Last
+		if config.UserAgent != "test-agent" {
+			t.Errorf("UserAgent = %q; want %q", config.UserAgent, "test-agent")
+		}
+		if len(config.URLList) != 1 || config.URLList[0].URL != "http://example.com" {
+			t.Errorf("URL not parsed correctly")
+		}
+		if len(config.Headers) != 1 || config.Headers[0] != "X-Test: true" {
+			t.Errorf("Header not parsed correctly")
+		}
+	})
+
+	t.Run("end of flags", func(t *testing.T) {
+		args := []string{"--", "-this-is-a-url"}
+		global := NewGlobalConfig()
+		parser := NewParameterParser(global)
+		if err := parser.Parse(args); err != nil {
+			t.Fatalf("Parse() failed: %v", err)
+		}
+		config := global.Last
+		if len(config.URLList) != 1 || config.URLList[0].URL != "-this-is-a-url" {
+			t.Errorf("URL after -- was not parsed correctly")
+		}
+	})
+
+	t.Run("error propagation", func(t *testing.T) {
+		args := []string{"--verbose", "--non-existent"}
+		global := NewGlobalConfig()
+		parser := NewParameterParser(global)
+		err := parser.Parse(args)
+		if err == nil {
+			t.Error("Parse() did not return an error for an invalid flag")
+		}
+	})
+}
+
 func TestNewGlobalConfig(t *testing.T) {
 	g := NewGlobalConfig()
 
@@ -101,6 +154,73 @@ func TestNewGlobalConfig(t *testing.T) {
 	}
 	if g.First != g.Last {
 		t.Error("GlobalConfig.First and .Last should point to the same initial config")
+	}
+}
+
+func TestParseCertParameter(t *testing.T) {
+	testCases := []struct {
+		name         string
+		input        string
+		expectedCert string
+		expectedPass string
+		onlyOnOS     string // "windows" or ""
+	}{
+		{"simple case", "mycert:mypass", "mycert", "mypass", ""},
+		{"no password", "mycert", "mycert", "", ""},
+		{"pkcs11 uri", "pkcs11:token=my-token;object=my-cert", "pkcs11:token=my-token;object=my-cert", "", ""},
+		{"escaped colon", `my\:cert:mypass`, `my:cert`, "mypass", ""},
+		{"windows path", `C:\path\to\cert.pem`, `C:\path\to\cert.pem`, "", "windows"},
+		{"windows path with password", `C:\path:password`, `C:\path`, "password", "windows"},
+		{"empty string", "", "", "", ""},
+		{"password only", ":mypass", "", "mypass", ""},
+		{"cert only", "mycert:", "mycert", "", ""},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.onlyOnOS != "" && tc.onlyOnOS != runtime.GOOS {
+				t.Skipf("Skipping test case %q on OS %q", tc.name, runtime.GOOS)
+			}
+
+			cert, pass := parseCertParameter(tc.input)
+			if cert != tc.expectedCert {
+				t.Errorf("Cert name = %q; want %q", cert, tc.expectedCert)
+			}
+			if pass != tc.expectedPass {
+				t.Errorf("Passphrase = %q; want %q", pass, tc.expectedPass)
+			}
+		})
+	}
+}
+
+func TestParseSizeParameter(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected int64
+		wantErr  bool
+	}{
+		{"bytes plain", "1024", 1024, false},
+		{"bytes with B", "2048B", 2048, false},
+		{"kilobytes uppercase", "100K", 102400, false},
+		{"megabytes lowercase", "2m", 2 * 1024 * 1024, false},
+		{"gigabytes mixed case", "1g", 1 * 1024 * 1024 * 1024, false},
+		{"empty string", "", 0, true},
+		{"invalid number", "abcK", 0, true},
+		{"invalid suffix", "100X", 0, true},
+		{"overflow", "9999999999999999999G", 0, true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := parseSizeParameter(tc.input)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("parseSizeParameter(%q) error = %v, wantErr %v", tc.input, err, tc.wantErr)
+			}
+			if !tc.wantErr && result != tc.expected {
+				t.Errorf("parseSizeParameter(%q) = %d; want %d", tc.input, result, tc.expected)
+			}
+		})
 	}
 }
 
