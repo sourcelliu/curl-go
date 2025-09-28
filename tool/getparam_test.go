@@ -159,6 +159,53 @@ func TestParameterParser_Parse(t *testing.T) {
 	})
 }
 
+func TestParameterParser_Auth(t *testing.T) {
+	testCases := []struct {
+		name     string
+		args     []string
+		expected AuthType
+	}{
+		{
+			name:     "basic only",
+			args:     []string{"--basic"},
+			expected: AuthBasic,
+		},
+		{
+			name:     "digest only",
+			args:     []string{"--digest"},
+			expected: AuthDigest,
+		},
+		{
+			name:     "multiple auth flags",
+			args:     []string{"--basic", "--ntlm"},
+			expected: AuthBasic | AuthNTLM,
+		},
+		{
+			name:     "anyauth overrides",
+			args:     []string{"--basic", "--anyauth", "--digest"},
+			expected: AuthAny,
+		},
+		{
+			name:     "anyauth alone",
+			args:     []string{"--anyauth"},
+			expected: AuthAny,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			global := NewGlobalConfig()
+			parser := NewParameterParser(global)
+			if err := parser.Parse(tc.args); err != nil {
+				t.Fatalf("Parse() failed: %v", err)
+			}
+			if global.Last.AuthType != uint(tc.expected) {
+				t.Errorf("AuthType = %d; want %d", global.Last.AuthType, tc.expected)
+			}
+		})
+	}
+}
+
 func TestNewGlobalConfig(t *testing.T) {
 	g := NewGlobalConfig()
 

@@ -15,7 +15,7 @@ import (
 func main() {
 	// A map to hold features and their status.
 	// The status is determined by Go's standard library capabilities and
-	// build tags (like `xattrEnabled`).
+	// build tags (like `XattrEnabled`).
 	features := map[string]bool{
 		"cookies":               true, // Go's net/http/cookiejar
 		"DoH":                   true, // Go's net.Resolver can be configured for DoH

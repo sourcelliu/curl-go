@@ -46,6 +46,11 @@ var options = map[string]Option{
 	"connect-timeout": {Name: "connect-timeout", Type: ArgString, Handler: handleConnectTimeout},
 	"fail":            {Name: "fail", ShortName: 'f', Type: ArgBool, Handler: handleBool("FailOnError")},
 	"range":           {Name: "range", ShortName: 'r', Type: ArgString, Handler: handleRange},
+	// Auth options
+	"anyauth":   {Name: "anyauth", Type: ArgBool, Handler: handleAuth(AuthAny)},
+	"basic":     {Name: "basic", Type: ArgBool, Handler: handleAuth(AuthBasic)},
+	"digest":    {Name: "digest", Type: ArgBool, Handler: handleAuth(AuthDigest)},
+	"ntlm":      {Name: "ntlm", Type: ArgBool, Handler: handleAuth(AuthNTLM)},
 }
 
 // shortOptions is a reverse map for finding long options by their short name.
@@ -146,6 +151,13 @@ func (p *ParameterParser) ParseOne(flag, nextarg string) (usedArg bool, err erro
 		err = opt.Handler(p, p.Global.Last, arg)
 	}
 
+	// If the handler returned an error, we should consider the argument
+	// as not "used", so it can be processed later (e.g., as a URL).
+	if err != nil {
+		// We return usedArg=false because the argument was not successfully consumed.
+		return false, err
+	}
+
 	return usedArg, err
 }
 
@@ -176,6 +188,17 @@ func handleBool(fieldName string) func(*ParameterParser, *OperationConfig, strin
 			config.UseHTTPGet = true
 		case "FailOnError":
 			config.FailOnError = true
+		}
+		return nil
+	}
+}
+
+func handleAuth(authType AuthType) func(*ParameterParser, *OperationConfig, string) error {
+	return func(p *ParameterParser, config *OperationConfig, arg string) error {
+		if authType == AuthAny {
+			config.AuthType = uint(AuthAny)
+		} else {
+			config.AuthType |= uint(authType)
 		}
 		return nil
 	}
@@ -241,9 +264,7 @@ func handleRange(p *ParameterParser, config *OperationConfig, arg string) error 
 	if config.UseResume {
 		return fmt.Errorf("--continue-at is mutually exclusive with --range")
 	}
-	// A basic validation, the C code is more complex.
 	if !strings.Contains(arg, "-") {
-		// curl itself warns but proceeds, we can be stricter.
 		return fmt.Errorf("a range must contain at least one dash")
 	}
 	config.Range = arg
